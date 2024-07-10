@@ -3,7 +3,9 @@ using namespace WaveSabrePlayerLib;
 
 #include <string.h>
 
-#include "Song.h"
+//#include "Song.h"
+//#include "D:\Code\github\tagsemb_monadgroup64k\vendor\wavesabre-sys\ws-lib\WaveSabreC\include\song.h"
+#include "D:\Dropbox\MyDir\Music\Ableton\wip\2024-Q1\wavesabre_raggajungle Project\wavesabre_raggajungle.h"
 
 void progressCallback(double progress, void *data)
 {
