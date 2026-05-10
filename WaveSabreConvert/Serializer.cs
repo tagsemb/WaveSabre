@@ -150,6 +150,19 @@ namespace WaveSabreConvert
                         writer.Write(point.Value);
                     }
                 }
+
+                writer.Write(track.MixerAutomations.Count);
+                foreach (var automation in track.MixerAutomations)
+                {
+                    writer.Write((byte)automation.Target);
+                    writer.Write(automation.SendIndex);
+                    writer.Write(automation.DeltaCodedPoints.Count);
+                    foreach (var point in automation.DeltaCodedPoints)
+                    {
+                        writer.Write(point.TimeFromLastPoint);
+                        writer.Write(point.Value);
+                    }
+                }
             }
 
             return stream.ToArray();

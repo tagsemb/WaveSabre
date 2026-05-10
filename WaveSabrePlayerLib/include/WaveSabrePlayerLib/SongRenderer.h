@@ -126,6 +126,37 @@ namespace WaveSabrePlayerLib
 				int pointIndex;
 			};
 
+			class MixerAutomation
+			{
+			public:
+				enum class Target : unsigned char
+				{
+					Volume,
+					Pan,
+					SendVolume,
+				};
+
+				MixerAutomation(SongRenderer *songRenderer);
+				~MixerAutomation();
+
+				float Evaluate(int absoluteSample);
+
+				Target target;
+				int sendIndex;
+
+			private:
+				typedef struct
+				{
+					int TimeStamp;
+					float Value;
+				} Point;
+
+				int numPoints;
+				Point *points;
+
+				int pointIndex;
+			};
+
 			SongRenderer *songRenderer;
 
 			float volume;
@@ -137,6 +168,13 @@ namespace WaveSabrePlayerLib
 
 			int numAutomations;
 			Automation **automations;
+
+			int numMixerAutomations;
+			MixerAutomation **mixerAutomations;
+
+			MixerAutomation *volumeAutomation;
+			MixerAutomation *panAutomation;
+			MixerAutomation **sendAutomations;
 
 			int lastSamplePos;
 			int accumEventTimestamp;

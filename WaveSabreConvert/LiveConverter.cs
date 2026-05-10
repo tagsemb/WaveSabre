@@ -15,11 +15,13 @@ namespace WaveSabreConvert
             public LiveProject.Track SendingTrack;
             public int ReceivingChannelIndex;
             public double Volume;
-            public Receive(LiveProject.Track sendingTrack, int receivingChannelIndex, double volume)
+            public List<LiveProject.Event> Envelope;
+            public Receive(LiveProject.Track sendingTrack, int receivingChannelIndex, double volume, List<LiveProject.Event> envelope)
             {
                 SendingTrack = sendingTrack;
                 ReceivingChannelIndex = receivingChannelIndex;
                 Volume = volume;
+                Envelope = envelope;
             }
         }
 
@@ -40,6 +42,8 @@ namespace WaveSabreConvert
         {
             this.logger = logger;
 
+            propagateGroupEnvelopes(project, logger);
+
             var song = new Song();
 
             song.Tempo = (int)project.Tempo;
@@ -53,7 +57,7 @@ namespace WaveSabreConvert
             {
                 foreach (var send in projectTrack.Sends)
                 {
-                    if (send.IsActive) trackReceives[send.ReceivingTrack].Add(new Receive(projectTrack, send.ReceivingChannelIndex - 1, send.Volume));
+                    if (send.IsActive) trackReceives[send.ReceivingTrack].Add(new Receive(projectTrack, send.ReceivingChannelIndex - 1, send.Volume, send.Envelope));
                 }
             }
 
@@ -126,6 +130,17 @@ namespace WaveSabreConvert
                             }
                         }
                     }
+                }
+
+                if (projectTrack.VolumeEnvelope != null)
+                {
+                    var auto = makeMixerAutomation(Song.MixerTarget.Volume, 0, projectTrack.VolumeEnvelope, song, false);
+                    if (auto.Points.Count > 0) track.MixerAutomations.Add(auto);
+                }
+                if (projectTrack.PanEnvelope != null)
+                {
+                    var auto = makeMixerAutomation(Song.MixerTarget.Pan, 0, projectTrack.PanEnvelope, song, true);
+                    if (auto.Points.Count > 0) track.MixerAutomations.Add(auto);
                 }
 
                 var events = new List<Event>();
@@ -236,19 +251,24 @@ namespace WaveSabreConvert
 
             // TODO: Clip all of this instead of just offsetting
             // adjust automation start times based on song start
+            int songStartSamples = secondsToSamples(songStartTime, song.Tempo, song.SampleRate);
             foreach (var track in song.Tracks)
             {
                 foreach (var automation in track.Automations)
                 {
                     foreach (var point in automation.Points)
-                    {
-                        point.TimeStamp -= secondsToSamples(songStartTime, song.Tempo, song.SampleRate);
-                    }
+                        point.TimeStamp -= songStartSamples;
+                }
+                foreach (var automation in track.MixerAutomations)
+                {
+                    foreach (var point in automation.Points)
+                        point.TimeStamp -= songStartSamples;
                 }
             }
 
             foreach (var kvp in projectTracksToSongTracks)
             {
+                int sendIndex = 0;
                 foreach (var projectReceive in trackReceives[kvp.Key])
                 {
                     if (projectTracksToSongTracks.ContainsKey(projectReceive.SendingTrack))
@@ -258,11 +278,125 @@ namespace WaveSabreConvert
                         receive.ReceivingChannelIndex = projectReceive.ReceivingChannelIndex;
                         receive.Volume = (float)projectReceive.Volume;
                         kvp.Value.Receives.Add(receive);
+
+                        if (projectReceive.Envelope != null)
+                        {
+                            var auto = makeMixerAutomation(Song.MixerTarget.SendVolume, sendIndex, projectReceive.Envelope, song, false);
+                            for (int p = 0; p < auto.Points.Count; p++) auto.Points[p].TimeStamp -= songStartSamples;
+                            if (auto.Points.Count > 0) kvp.Value.MixerAutomations.Add(auto);
+                        }
+
+                        sendIndex++;
                     }
                 }
             }
 
             return song;
+        }
+
+        // Replicate group-track volume/pan envelopes onto each child track.
+        // Pointwise-multiply when both group and child have volume envelopes; child wins for pan.
+        // After propagation the group's own mixer envelopes are cleared so they don't double-apply
+        // (the group track remains in the output as the audio routing hub for its children).
+        static void propagateGroupEnvelopes(LiveProject project, ILog logger)
+        {
+            var children = new Dictionary<string, List<LiveProject.Track>>();
+            foreach (var pt in project.Tracks)
+            {
+                if (string.IsNullOrEmpty(pt.TrackGroupId) || pt.TrackGroupId == "-1") continue;
+                if (!children.ContainsKey(pt.TrackGroupId))
+                    children[pt.TrackGroupId] = new List<LiveProject.Track>();
+                children[pt.TrackGroupId].Add(pt);
+            }
+
+            // Iterate in project order so outer groups propagate to (possibly nested) inner groups
+            // first; subsequent inner-group passes then carry the merged envelope to leaf children.
+            foreach (var groupTrack in project.Tracks)
+            {
+                if (!groupTrack.IsGroupTrack) continue;
+                if (!children.ContainsKey(groupTrack.Id)) continue;
+
+                var groupChildren = children[groupTrack.Id];
+
+                if (groupTrack.VolumeEnvelope != null)
+                {
+                    foreach (var child in groupChildren)
+                    {
+                        child.VolumeEnvelope = child.VolumeEnvelope == null
+                            ? groupTrack.VolumeEnvelope
+                            : multiplyEnvelopes(groupTrack.VolumeEnvelope, child.VolumeEnvelope);
+                    }
+                    groupTrack.VolumeEnvelope = null;
+                    // Reset the group's static volume to unity. Ableton's Manual value is ignored when
+                    // automation is active; leaving it in would double-apply on the now-flat group bus.
+                    groupTrack.Volume = 1.0;
+                    logger.WriteLine("Propagated group '{0}' volume envelope to {1} child(ren)", groupTrack.Name, groupChildren.Count);
+                }
+
+                if (groupTrack.PanEnvelope != null)
+                {
+                    foreach (var child in groupChildren)
+                    {
+                        // Pan: child wins when both have envelopes (multiplying pan positions is meaningless).
+                        if (child.PanEnvelope == null) child.PanEnvelope = groupTrack.PanEnvelope;
+                    }
+                    groupTrack.PanEnvelope = null;
+                    groupTrack.Pan = 0.0;
+                    logger.WriteLine("Propagated group '{0}' pan envelope to {1} child(ren)", groupTrack.Name, groupChildren.Count);
+                }
+            }
+        }
+
+        static List<LiveProject.Event> multiplyEnvelopes(List<LiveProject.Event> a, List<LiveProject.Event> b)
+        {
+            var times = new SortedSet<double>();
+            foreach (var e in a) times.Add(e.Time);
+            foreach (var e in b) times.Add(e.Time);
+
+            var result = new List<LiveProject.Event>();
+            foreach (var t in times)
+            {
+                result.Add(new LiveProject.Event
+                {
+                    Time = t,
+                    Value = evaluateEnvelopeAt(a, t) * evaluateEnvelopeAt(b, t)
+                });
+            }
+            return result;
+        }
+
+        static float evaluateEnvelopeAt(List<LiveProject.Event> events, double time)
+        {
+            if (events.Count == 0) return 1.0f;
+            if (time <= events[0].Time) return events[0].Value;
+            if (time >= events[events.Count - 1].Time) return events[events.Count - 1].Value;
+            for (int i = 1; i < events.Count; i++)
+            {
+                if (events[i].Time >= time)
+                {
+                    double dt = events[i].Time - events[i - 1].Time;
+                    if (dt <= 0) return events[i].Value;
+                    float f = (float)((time - events[i - 1].Time) / dt);
+                    return events[i - 1].Value + (events[i].Value - events[i - 1].Value) * f;
+                }
+            }
+            return events[events.Count - 1].Value;
+        }
+
+        static Song.MixerAutomation makeMixerAutomation(Song.MixerTarget target, int sendIndex, List<LiveProject.Event> envelope, Song song, bool remapPanRange)
+        {
+            var auto = new Song.MixerAutomation { Target = target, SendIndex = sendIndex };
+            foreach (var e in envelope)
+            {
+                if (e.Time >= 0.0)
+                {
+                    var point = new Song.Point();
+                    point.TimeStamp = secondsToSamples(e.Time, song.Tempo, song.SampleRate);
+                    point.Value = remapPanRange ? (e.Value + 1.0f) * 0.5f : e.Value;
+                    auto.Points.Add(point);
+                }
+            }
+            return auto;
         }
 
         void visitTrack(LiveProject.Track projectTrack)

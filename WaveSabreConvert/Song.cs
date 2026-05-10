@@ -80,6 +80,24 @@ namespace WaveSabreConvert
             public List<DeltaCodedPoint> DeltaCodedPoints = new List<DeltaCodedPoint>();
         }
 
+        public enum MixerTarget
+        {
+            Volume,
+            Pan,
+            SendVolume
+        }
+
+        public class MixerAutomation
+        {
+            public MixerTarget Target;
+            public int SendIndex;
+            public List<Point> Points = new List<Point>();
+            /// <summary>
+            /// Auto populated by converter, do not populate
+            /// </summary>
+            public List<DeltaCodedPoint> DeltaCodedPoints = new List<DeltaCodedPoint>();
+        }
+
         public class Track
         {
             public string Name;
@@ -88,6 +106,7 @@ namespace WaveSabreConvert
             public List<Device> Devices = new List<Device>();
             public List<Event> Events = new List<Event>();
             public List<Automation> Automations = new List<Automation>();
+            public List<MixerAutomation> MixerAutomations = new List<MixerAutomation>();
             /// <summary>
             /// Auto populated by converter, do not populate
             /// </summary>
@@ -234,31 +253,33 @@ namespace WaveSabreConvert
 
             foreach (var track in Tracks)
             {
-                if (track.Automations.Count > 0)
-                {
-                    foreach (var auto in track.Automations)
-                    {
-                        var points = auto.DeltaCodedPoints;
-
-                        bool done = false;
-                        while (!done)
-                        {
-                            var dupeId = GetDupeDeltaPoint(points);
-                            if (dupeId == -1)
-                            {
-                                done = true;
-                            }
-                            else
-                            {
-                                points[dupeId].TimeFromLastPoint += points[dupeId + 1].TimeFromLastPoint;
-                                points.Remove(points[dupeId + 1]);
-                                dupeCount++;
-                            }
-                        }
-                    }
-                }
+                foreach (var auto in track.Automations)
+                    dupeCount += DedupePoints(auto.DeltaCodedPoints);
+                foreach (var auto in track.MixerAutomations)
+                    dupeCount += DedupePoints(auto.DeltaCodedPoints);
             }
 
+            return dupeCount;
+        }
+
+        private int DedupePoints(List<DeltaCodedPoint> points)
+        {
+            var dupeCount = 0;
+            bool done = false;
+            while (!done)
+            {
+                var dupeId = GetDupeDeltaPoint(points);
+                if (dupeId == -1)
+                {
+                    done = true;
+                }
+                else
+                {
+                    points[dupeId].TimeFromLastPoint += points[dupeId + 1].TimeFromLastPoint;
+                    points.Remove(points[dupeId + 1]);
+                    dupeCount++;
+                }
+            }
             return dupeCount;
         }
 
@@ -280,21 +301,11 @@ namespace WaveSabreConvert
             foreach (var t in Tracks)
             {
                 foreach (var a in t.Automations)
-                {
-                    lastTime = 0;
-                    foreach (var p in a.Points)
-                    {
-                        a.DeltaCodedPoints.Add(new DeltaCodedPoint()
-                        {
-                            TimeFromLastPoint = p.TimeStamp - lastTime,
-                            Value = FloatToByte(p.Value)
-                        });
+                    DeltaEncodePoints(a.Points, a.DeltaCodedPoints);
+                foreach (var a in t.MixerAutomations)
+                    DeltaEncodePoints(a.Points, a.DeltaCodedPoints);
 
-                        lastTime = p.TimeStamp;
-                    }
-                }
-
-                lastTime = 0; 
+                lastTime = 0;
                 foreach (var e in t.Events)
                 {
                     t.DeltaCodedEvents.Add(new DeltaCodedEvent()
@@ -307,6 +318,20 @@ namespace WaveSabreConvert
 
                     lastTime = e.TimeStamp;
                 }
+            }
+        }
+
+        private void DeltaEncodePoints(List<Point> points, List<DeltaCodedPoint> deltaCodedPoints)
+        {
+            int lastTime = 0;
+            foreach (var p in points)
+            {
+                deltaCodedPoints.Add(new DeltaCodedPoint()
+                {
+                    TimeFromLastPoint = p.TimeStamp - lastTime,
+                    Value = FloatToByte(p.Value)
+                });
+                lastTime = p.TimeStamp;
             }
         }
 

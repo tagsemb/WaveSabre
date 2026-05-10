@@ -13,6 +13,8 @@ namespace WaveSabreConvert
             public double MinVolume;
             public double Volume;
             public bool IsActive;
+            public int AutomationTarget = -1;
+            public List<LiveProject.Event> Envelope;
         }
 
         LiveProject project;
@@ -89,8 +91,11 @@ namespace WaveSabreConvert
                                                 {
                                                     case "MidiTrack":
                                                     case "AudioTrack":
-                                                    case "GroupTrack":
                                                         parseTrack();
+                                                        break;
+
+                                                    case "GroupTrack":
+                                                        parseTrack(isGroupTrack: true);
                                                         break;
 
                                                     case "ReturnTrack":
@@ -194,17 +199,22 @@ namespace WaveSabreConvert
                 {
                     // Cull sends whose value is -inf
                     if (returnSendInfo.Volume > returnSendInfo.MinVolume)
-                        kvp.Key.Sends.Add(new LiveProject.Send(project.ReturnTracks[kvp.Value.IndexOf(returnSendInfo)], 1, returnSendInfo.Volume, returnSendInfo.IsActive));
+                    {
+                        var send = new LiveProject.Send(project.ReturnTracks[kvp.Value.IndexOf(returnSendInfo)], 1, returnSendInfo.Volume, returnSendInfo.IsActive);
+                        send.Envelope = returnSendInfo.Envelope;
+                        kvp.Key.Sends.Add(send);
+                    }
                 }
             }
 
             return project;
         }
 
-        void parseTrack(bool isMasterTrack = false, bool isReturnTrack = false)
+        void parseTrack(bool isMasterTrack = false, bool isReturnTrack = false, bool isGroupTrack = false)
         {
             var currentNode = reader.Name;
             var track = new LiveProject.Track();
+            track.IsGroupTrack = isGroupTrack;
             returnSendInfos.Add(track, new List<ReturnSendInfo>());
             if (!isMasterTrack) track.Id = getAttrib("Id");
             while (reader.Read() && !(reader.NodeType == XmlNodeType.EndElement && reader.Name == currentNode))
@@ -234,9 +244,29 @@ namespace WaveSabreConvert
                     }
                 }
             }
+
+            if (track.VolumeAutomationTarget >= 0)
+                track.VolumeEnvelope = findEnvelope(track, track.VolumeAutomationTarget);
+            if (track.PanAutomationTarget >= 0)
+                track.PanEnvelope = findEnvelope(track, track.PanAutomationTarget);
+            foreach (var info in returnSendInfos[track])
+            {
+                if (info.AutomationTarget >= 0)
+                    info.Envelope = findEnvelope(track, info.AutomationTarget);
+            }
+
             project.Tracks.Add(track);
             if (isReturnTrack) project.ReturnTracks.Add(track);
             if (isMasterTrack) project.MasterTrack = track;
+        }
+
+        List<LiveProject.Event> findEnvelope(LiveProject.Track track, int targetId)
+        {
+            foreach (var auto in track.AutomationEnvelopes)
+            {
+                if (auto.PointeeId == targetId) return auto.Events;
+            }
+            return null;
         }
 
         void parseTransport()
@@ -339,10 +369,37 @@ namespace WaveSabreConvert
                         case "Volume":
                             while (reader.Read() && !(reader.NodeType == XmlNodeType.EndElement && reader.Name == "Volume"))
                             {
-                                if (reader.NodeType == XmlNodeType.Element && (reader.Name == "FloatEvent" || reader.Name == "Manual"))
+                                if (reader.NodeType == XmlNodeType.Element)
                                 {
-                                    track.Volume = getDoubleValueAttrib();
-                                    break;
+                                    switch (reader.Name)
+                                    {
+                                        case "FloatEvent":
+                                        case "Manual":
+                                            track.Volume = getDoubleValueAttrib();
+                                            break;
+                                        case "AutomationTarget":
+                                            track.VolumeAutomationTarget = getIntAttrib("Id");
+                                            break;
+                                    }
+                                }
+                            }
+                            break;
+
+                        case "Pan":
+                            while (reader.Read() && !(reader.NodeType == XmlNodeType.EndElement && reader.Name == "Pan"))
+                            {
+                                if (reader.NodeType == XmlNodeType.Element)
+                                {
+                                    switch (reader.Name)
+                                    {
+                                        case "FloatEvent":
+                                        case "Manual":
+                                            track.Pan = getDoubleValueAttrib();
+                                            break;
+                                        case "AutomationTarget":
+                                            track.PanAutomationTarget = getIntAttrib("Id");
+                                            break;
+                                    }
                                 }
                             }
                             break;
@@ -402,6 +459,10 @@ namespace WaveSabreConvert
                         case "Active": // fallthrough
                         case "EnabledByUser": // Ableton 11 -> 12 changed this from Active to EnabledByUser
                             returnSendInfo.IsActive = getBoolValueAttrib();
+                            break;
+
+                        case "AutomationTarget":
+                            returnSendInfo.AutomationTarget = getIntAttrib("Id");
                             break;
                     }
                 }

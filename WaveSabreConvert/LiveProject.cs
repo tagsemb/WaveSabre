@@ -10,6 +10,7 @@ namespace WaveSabreConvert
             public int ReceivingChannelIndex;
             public double Volume;
             public bool IsActive;
+            public List<Event> Envelope;
             public Send(Track receivingTrack, int receivingChannelIndex, double volume, bool isActive)
             {
                 ReceivingTrack = receivingTrack;
@@ -74,12 +75,18 @@ namespace WaveSabreConvert
             public string Id;
             public string Name;
             public double Volume;
+            public double Pan;
             public bool IsSpeakerOn;
+            public bool IsGroupTrack;
             public List<Send> Sends = new List<Send>();
             public List<Device> Devices = new List<Device>();
             public List<MidiClip> MidiClips = new List<MidiClip>();
             public string TrackGroupId;
             public List<AutomationEnvelope> AutomationEnvelopes = new List<AutomationEnvelope>();
+            public int VolumeAutomationTarget = -1;
+            public int PanAutomationTarget = -1;
+            public List<Event> VolumeEnvelope;
+            public List<Event> PanEnvelope;
         }
 
         public List<Track> Tracks = new List<Track>();
