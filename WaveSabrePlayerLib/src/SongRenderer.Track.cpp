@@ -11,6 +11,7 @@ namespace WaveSabrePlayerLib
 		this->songRenderer = songRenderer;
 
 		volume = songRenderer->readFloat();
+		pan = songRenderer->readFloat();
 
 		NumReceives = songRenderer->readInt();
 		if (NumReceives)
@@ -162,7 +163,20 @@ namespace WaveSabrePlayerLib
 
 		if (panAutomation)
 		{
-			float pan = panAutomation->Evaluate(lastSamplePos);
+			float p = panAutomation->Evaluate(lastSamplePos);
+			float lGain = Helpers::PanToScalarLeft(p);
+			float rGain = Helpers::PanToScalarRight(p);
+			for (int i = 0; i < numBuffers; i += 2)
+			{
+				for (int j = 0; j < numSamples; j++) Buffers[i][j] *= lGain;
+			}
+			for (int i = 1; i < numBuffers; i += 2)
+			{
+				for (int j = 0; j < numSamples; j++) Buffers[i][j] *= rGain;
+			}
+		}
+		else if (pan != 0.5f)
+		{
 			float lGain = Helpers::PanToScalarLeft(pan);
 			float rGain = Helpers::PanToScalarRight(pan);
 			for (int i = 0; i < numBuffers; i += 2)

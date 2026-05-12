@@ -160,6 +160,7 @@ namespace WaveSabrePlayerLib
 			SongRenderer *songRenderer;
 
 			float volume;
+			float pan;
 
 			int numDevices;
 			int *devicesIndicies;

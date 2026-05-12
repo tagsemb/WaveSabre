@@ -121,6 +121,7 @@ namespace WaveSabreConvert
                 var trackSize = stream.Position;
 
                 writer.Write(track.Volume);
+                writer.Write(track.Pan);
 
                 writer.Write(track.Receives.Count);
                 foreach (var receive in track.Receives)

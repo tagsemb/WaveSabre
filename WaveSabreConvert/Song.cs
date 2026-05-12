@@ -102,6 +102,10 @@ namespace WaveSabreConvert
         {
             public string Name;
             public float Volume;
+            // Pan is in runtime convention: 0 = hard left, 0.5 = center, 1 = hard right.
+            // Default 0.5f matters: converters that don't set Pan (Reaper, Renoise) leave
+            // tracks at center, not at hard left.
+            public float Pan = 0.5f;
             public List<Receive> Receives = new List<Receive>();
             public List<Device> Devices = new List<Device>();
             public List<Event> Events = new List<Event>();

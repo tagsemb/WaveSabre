@@ -79,6 +79,8 @@ namespace WaveSabreConvert
                 var track = new Song.Track();
                 track.Name = projectTrack.Name;
                 track.Volume = (float)projectTrack.Volume;
+                // Remap Ableton's pan (-1..+1, 0 = center) to runtime convention (0..1, 0.5 = center).
+                track.Pan = (float)((projectTrack.Pan + 1.0) * 0.5);
 
                 foreach (var projectDevice in projectTrack.Devices)
                 {
@@ -322,9 +324,24 @@ namespace WaveSabreConvert
                 {
                     foreach (var child in groupChildren)
                     {
-                        child.VolumeEnvelope = child.VolumeEnvelope == null
-                            ? groupTrack.VolumeEnvelope
-                            : multiplyEnvelopes(groupTrack.VolumeEnvelope, child.VolumeEnvelope);
+                        if (child.VolumeEnvelope == null)
+                        {
+                            // Child has no envelope of its own — its static fader value IS its
+                            // effective volume. Once we assign an envelope here, the runtime
+                            // ignores the static fader entirely (volumeAutomation overrides
+                            // volume in SongRenderer::Track), so we fold it into the envelope
+                            // and reset the static to unity. Without this, lowering a child
+                            // track's fader has no effect once the group automation propagates.
+                            child.VolumeEnvelope = scaleEnvelope(groupTrack.VolumeEnvelope, (float)child.Volume);
+                            child.Volume = 1.0;
+                        }
+                        else
+                        {
+                            // Child already has an envelope — its static fader is already
+                            // overridden (in both Ableton and the runtime), so we just
+                            // pointwise-multiply the two envelopes and leave the static alone.
+                            child.VolumeEnvelope = multiplyEnvelopes(groupTrack.VolumeEnvelope, child.VolumeEnvelope);
+                        }
                     }
                     groupTrack.VolumeEnvelope = null;
                     // Reset the group's static volume to unity. Ableton's Manual value is ignored when
@@ -337,14 +354,78 @@ namespace WaveSabreConvert
                 {
                     foreach (var child in groupChildren)
                     {
-                        // Pan: child wins when both have envelopes (multiplying pan positions is meaningless).
-                        if (child.PanEnvelope == null) child.PanEnvelope = groupTrack.PanEnvelope;
+                        if (child.PanEnvelope == null)
+                        {
+                            // Child has no pan envelope of its own — its static fader IS its pan.
+                            // Fold it into the group's envelope (clamped sum in Ableton's -1..+1 space)
+                            // and reset the static to center, mirroring the volume case.
+                            child.PanEnvelope = offsetEnvelopeClamped(groupTrack.PanEnvelope, (float)child.Pan, -1.0f, 1.0f);
+                            child.Pan = 0.0;
+                        }
+                        else
+                        {
+                            // Both have envelopes. Nested balance controls can't flatten perfectly
+                            // into one pan stage; clamped pointwise sum is the practical
+                            // approximation — "group pan offsets child pan", with extremes saturated.
+                            child.PanEnvelope = addEnvelopesClamped(groupTrack.PanEnvelope, child.PanEnvelope, -1.0f, 1.0f);
+                        }
                     }
                     groupTrack.PanEnvelope = null;
                     groupTrack.Pan = 0.0;
                     logger.WriteLine("Propagated group '{0}' pan envelope to {1} child(ren)", groupTrack.Name, groupChildren.Count);
                 }
             }
+        }
+
+        static List<LiveProject.Event> scaleEnvelope(List<LiveProject.Event> envelope, float scale)
+        {
+            if (scale == 1.0f) return envelope;
+            var result = new List<LiveProject.Event>();
+            foreach (var e in envelope)
+            {
+                result.Add(new LiveProject.Event
+                {
+                    Time = e.Time,
+                    Value = e.Value * scale
+                });
+            }
+            return result;
+        }
+
+        // Add a constant to every point of an envelope, clamped to [min, max].
+        // Used for folding a track's static pan into a propagated group pan envelope.
+        static List<LiveProject.Event> offsetEnvelopeClamped(List<LiveProject.Event> envelope, float offset, float min, float max)
+        {
+            if (offset == 0.0f) return envelope;
+            var result = new List<LiveProject.Event>();
+            foreach (var e in envelope)
+            {
+                float v = e.Value + offset;
+                if (v < min) v = min;
+                else if (v > max) v = max;
+                result.Add(new LiveProject.Event { Time = e.Time, Value = v });
+            }
+            return result;
+        }
+
+        // Pointwise sum two envelopes (sampled at the union of their time points), clamped to [min, max].
+        // Used to combine a group's pan envelope with a child's pan envelope when both exist; the
+        // clamped sum is the practical one-stage approximation of nested balance controls.
+        static List<LiveProject.Event> addEnvelopesClamped(List<LiveProject.Event> a, List<LiveProject.Event> b, float min, float max)
+        {
+            var times = new SortedSet<double>();
+            foreach (var e in a) times.Add(e.Time);
+            foreach (var e in b) times.Add(e.Time);
+
+            var result = new List<LiveProject.Event>();
+            foreach (var t in times)
+            {
+                float v = evaluateEnvelopeAt(a, t) + evaluateEnvelopeAt(b, t);
+                if (v < min) v = min;
+                else if (v > max) v = max;
+                result.Add(new LiveProject.Event { Time = t, Value = v });
+            }
+            return result;
         }
 
         static List<LiveProject.Event> multiplyEnvelopes(List<LiveProject.Event> a, List<LiveProject.Event> b)
