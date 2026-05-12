@@ -28,19 +28,36 @@ namespace WaveSabreConvert
             return reader.GetAttribute(attribName);
         }
 
+        // Helper to get better error messages if attribute is missing
+        string getRequiredAttrib(string attribName)
+        {
+            var raw = reader.GetAttribute(attribName);
+            if (raw == null)
+            {
+                throw new Exception("Missing required '" + attribName + "' attribute on <" + reader.Name + ">");
+            }
+            return raw;
+        }
+
         double getDoubleAttrib(string attribName)
         {
-            return double.Parse(getAttrib(attribName), System.Globalization.CultureInfo.InvariantCulture);
+            return double.Parse(getRequiredAttrib(attribName), System.Globalization.CultureInfo.InvariantCulture);
         }
 
         int getIntAttrib(string attribName)
         {
-            return int.Parse(getAttrib(attribName), System.Globalization.CultureInfo.InvariantCulture);
+            return int.Parse(getRequiredAttrib(attribName), System.Globalization.CultureInfo.InvariantCulture);
         }
 
         bool getBoolAttrib(string attribName)
         {
-            return bool.Parse(getAttrib(attribName));
+            return bool.Parse(getRequiredAttrib(attribName));
+        }
+
+        bool getBoolAttribOr(string attribName, bool defaultValue)
+        {
+            var raw = reader.GetAttribute(attribName);
+            return raw == null ? defaultValue : bool.Parse(raw);
         }
 
         string getValueAttrib()
@@ -589,7 +606,7 @@ namespace WaveSabreConvert
                             note.Time = getDoubleAttrib("Time");
                             note.Duration = getDoubleAttrib("Duration");
                             note.Velocity = (int)getDoubleAttrib("Velocity");
-                            note.IsEnabled = getBoolAttrib("IsEnabled");
+                            note.IsEnabled = getBoolAttribOr("IsEnabled", true); // Ableton 12 now omits IsEnabled when it's the default (true)
                             keyTrack.Notes.Add(note);
                             break;
 
